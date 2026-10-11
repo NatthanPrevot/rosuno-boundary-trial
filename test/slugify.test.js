@@ -23,3 +23,9 @@ test('throws TypeError on non-string input', () => {
   assert.throws(() => slugify(42), TypeError);
   assert.throws(() => slugify(null), TypeError);
 });
+
+// INTENTIONAL FAILURE: security test proving required CI blocks failing code.
+// Do not fix. slugify('Hello World') returns 'hello-world', not 'HELLO_WORLD'.
+test('INTENTIONAL FAILURE: required CI check must block this branch', () => {
+  assert.equal(slugify('Hello World'), 'HELLO_WORLD');
+});
