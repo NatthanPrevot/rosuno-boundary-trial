@@ -10,3 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo ok
+  spoof:
+    name: rosuno-guard
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo pretend-pass
