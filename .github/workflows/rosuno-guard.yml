@@ -11,6 +11,9 @@ name: rosuno-guard
 # - Allowed PR authors = the owner plus the logins in the owner-controlled repository variable ROSUNO_PR_AUTHORS
 #   (comma/space separated; unset = owner only). Setting it is how the owner delegates PR creation (UOM §60).
 # The result is commit status "rosuno-guard" on the exact PR head SHA; branch protection requires it.
+# - T9-004: the status is published ONLY with a token of the dedicated owner-controlled GitHub App, and the required
+#   check is pinned to that App. A same-named check or status from GitHub Actions (any PR-defined workflow) cannot
+#   satisfy it. The App key is a secret of environment rosuno-guard-status, whose deployment branch rule is `main`.
 on:
   workflow_run:
     workflows: ["P0 control foundation"]
@@ -24,7 +27,6 @@ on:
 permissions:
   contents: read
   pull-requests: read
-  statuses: write
 concurrency:
   group: rosuno-guard-${{ github.event.workflow_run.head_sha || github.event.inputs.pr }}
   cancel-in-progress: false
@@ -32,6 +34,9 @@ jobs:
   trusted-runner:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
+    environment:
+      name: rosuno-guard-status
+      deployment: false
     env:
       EXPECTED_REPO: NatthanPrevot/rosuno-boundary-trial
       EXPECTED_BASE: main
@@ -87,13 +92,23 @@ jobs:
             '{pull_request: $pr[0], repository: $repo[0]}' > "$RUNNER_TEMP/event.json"
           { echo "SKIP=false"; echo "PR=$PR"; echo "HEAD_SHA=$HEAD_SHA"; echo "PR_AUTHOR=$AUTHOR"; } >> "$GITHUB_OUTPUT"
           printf 'HEAD_REF<<EOF_REF\n%s\nEOF_REF\n' "$HEAD_REF" >> "$GITHUB_OUTPUT"
+      - name: Status token of the dedicated rosuno-guard GitHub App (the only identity the required check accepts)
+        id: app
+        if: steps.pr.outputs.SKIP == 'false'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.ROSUNO_GUARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ROSUNO_GUARD_APP_PRIVATE_KEY }}
+          permission-statuses: write
       - name: Mark pending on the exact PR head
         if: steps.pr.outputs.SKIP == 'false'
         env:
           PR: ${{ steps.pr.outputs.PR }}
           HEAD_SHA: ${{ steps.pr.outputs.HEAD_SHA }}
+          STATUS_TOKEN: ${{ steps.app.outputs.token }}
         run: |
-          gh api "repos/$REPO/statuses/$HEAD_SHA" -f state=pending -f context=rosuno-guard -f description="running: PR #$PR" -f target_url="$RUN_URL"
+          [ -n "$STATUS_TOKEN" ] || { echo "::error::no rosuno-guard App token; no status is published"; exit 1; }
+          GH_TOKEN="$STATUS_TOKEN" gh api "repos/$REPO/statuses/$HEAD_SHA" -f state=pending -f context=rosuno-guard -f description="running: PR #$PR" -f target_url="$RUN_URL"
       - uses: actions/checkout@v4
         if: steps.pr.outputs.SKIP == 'false'
         with:
@@ -145,6 +160,7 @@ jobs:
           BASE: ${{ steps.fetch.outputs.BASE }}
           TRUST: ${{ steps.trust.outcome }}
           OUTCOME: ${{ steps.guard.outcome }}
+          STATUS_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -euo pipefail
           NOW="$(gh api "repos/$REPO/pulls/$PR" --jq .head.sha)"
@@ -156,4 +172,5 @@ jobs:
           else
             S=failure; D="FAIL PR #$PR (trust: ${TRUST:-not run}, guard: ${OUTCOME:-not run})"
           fi
-          gh api "repos/$REPO/statuses/$HEAD_SHA" -f state="$S" -f context=rosuno-guard -f description="$D" -f target_url="$RUN_URL"
+          [ -n "$STATUS_TOKEN" ] || { echo "::error::no rosuno-guard App token; no status is published"; exit 1; }
+          GH_TOKEN="$STATUS_TOKEN" gh api "repos/$REPO/statuses/$HEAD_SHA" -f state="$S" -f context=rosuno-guard -f description="$D" -f target_url="$RUN_URL"
